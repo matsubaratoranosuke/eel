@@ -1,4 +1,4 @@
-const CACHE = 'eigo-v600f2d07';
+const CACHE = 'eigo-v90a3e802';
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', './index.html']))); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });
 // Network first so content updates arrive; fall back to the cache when offline.
