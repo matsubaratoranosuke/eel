@@ -247,6 +247,8 @@ select.btn { appearance: none; -webkit-appearance: none; padding-right: 18px; }
 .seg { display: flex; background: var(--fill); padding: 3px; border-radius: 6px; gap: 2px; }
 .seg button { flex: 1; min-height: 38px; border: none; border-radius: 4px; background: transparent; font-weight: 600; font-size: 0.92rem; cursor: pointer; color: var(--muted); transition: background 0.26s, color 0.26s; }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+.seg-wrap { display: flex; flex-direction: column; gap: 8px; }
+.seg-note { margin: 0 2px; }
 
 /* ---------- unit page */
 .unit-head { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
@@ -951,6 +953,7 @@ h1.display { font-weight: 800; }
 /* long listening */
 .ls-type { flex: none; font-size: 0.72rem; font-weight: 700; color: #0a84ff; background: color-mix(in srgb, #0a84ff 10%, var(--surface)); padding: 2px 8px; border-radius: 5px; }
 .ls-item { align-items: center; gap: 10px; }
+.ls-type.sm { display: inline-block; font-size: 0.68rem; padding: 0 6px; margin-right: 6px; vertical-align: 1px; }
 .ls-head { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .ls-head .display { margin: 0; }
 .ls-player { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -977,7 +980,6 @@ h1.display { font-weight: 800; }
 /* TED talks */
 .ls-type.ted { color: #e62b1e; background: color-mix(in srgb, #e62b1e 10%, var(--surface)); }
 .ted-part { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, #e62b1e 6%, var(--surface)); border: 1px solid color-mix(in srgb, #e62b1e 16%, transparent); }
-.ted-group { margin: 8px 0 0; font-size: 0.95rem; }
 .ted-phrase .sentence { margin-top: 6px; }
 </style>
 <div id="app"></div>
@@ -1510,7 +1512,11 @@ h1.display { font-weight: 800; }
   let V = { name: 'home' };
   let L = null;
   let Q = null;
-  let ui = { browse: 'grammar', confirm: null, flash: '', screen: '', bar: 0, fc: null };
+  // Which part of a page was open last time (this device only; not part of the study record).
+  const PREF_KEY = 'eel-ui';
+  const prefs = (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; } })();
+  function setPref(k, v) { prefs[k] = v; try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) { /* optional */ } }
+  let ui = { course: prefs.course || 'path', listen: prefs.listen || 'audio', talk: prefs.talk || 'rp', confirm: null, flash: '', screen: '', bar: 0, fc: null };
 
   function go(name, params) {
     V = Object.assign({ name }, params || {});
@@ -1524,10 +1530,22 @@ h1.display { font-weight: 800; }
     course: '<path d="M6 4h10.5A2.5 2.5 0 0 1 19 6.5V20H8.5A2.5 2.5 0 0 1 6 17.5z"/><path d="M6 17.5A2.5 2.5 0 0 1 8.5 15H19"/>',
     browse: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>',
     record: '<path d="M6 19v-6M12 19V6M18 19v-9"/>',
+    listen: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
+    talk: '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 3.5V16a2.5 2.5 0 0 1-2-2.5z"/>',
     words: '<path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v13H6.5A1.5 1.5 0 0 0 5 18.5z"/><path d="M5 18.5A1.5 1.5 0 0 0 6.5 20H19M9.5 13l2.5-6 2.5 6M10.4 11h3.2"/>'
   };
+  // A unit opened from another page keeps that page's tab lit.
+  const TAB_OF = { home: 'home', course: 'course', browse: 'course', record: 'home', talk: 'talk' };
+  // A page's own sections: a segmented control and one line saying what the open section holds.
+  function segBar(key, modes) {
+    const cur = modes.find(m => m[0] === ui[key]) || modes[0];
+    return '<div class="seg-wrap"><div class="seg" role="group">' + modes.map(([v, label]) =>
+      '<button data-act="seg" data-k="' + key + '" data-m="' + v + '" aria-pressed="' + (v === cur[0]) + '">' + esc(label) + '</button>').join('') + '</div>' +
+      '<p class="small muted seg-note">' + esc(cur[2]) + '</p></div>';
+  }
+  const segMode = (key, modes) => (modes.find(m => m[0] === ui[key]) || modes[0])[0];
   function tabbar(active) {
-    const tabs = [['home', 'Home'], ['course', 'Course'], ['words', 'Words'], ['browse', 'Explore'], ['record', 'Progress']];
+    const tabs = [['home', 'Home'], ['course', 'Course'], ['listen', 'Listen'], ['talk', 'Talk'], ['words', 'Words']];
     return '<div class="tabbar"><nav>' + tabs.map(([n, t]) =>
       '<button data-act="tab" data-v="' + n + '"' + (n === active ? ' aria-current="page"' : '') + '><svg viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + '</svg>' + t + '</button>').join('') + '</nav></div>';
   }
@@ -1553,21 +1571,20 @@ h1.display { font-weight: 800; }
     switch (V.name) {
       case 'home': html = viewHome(); tab = 'home'; break;
       case 'course': html = viewCourse(); tab = 'course'; break;
-      case 'browse': html = viewBrowse(); tab = 'browse'; break;
-      case 'scene': html = viewScene(); tab = 'browse'; break;
-      case 'record': html = viewRecord(); tab = 'record'; break;
-      case 'unit': html = viewUnit(); tab = V.from || 'course'; break;
-      case 'read': html = viewRead(); tab = V.from || 'course'; break;
+      case 'scene': html = viewScene(); tab = 'course'; break;
+      case 'record': html = viewRecord(); tab = 'home'; break;
+      case 'unit': html = viewUnit(); tab = TAB_OF[V.from] || 'course'; break;
+      case 'read': html = viewRead(); tab = TAB_OF[V.from] || 'course'; break;
       case 'lesson': html = viewLesson(); break;
-      case 'mine': html = viewMine(); tab = 'record'; break;
-      case 'lookback': html = viewLookBack(); tab = 'record'; break;
-      case 'talk': html = viewTalk(); tab = 'home'; break;
-      case 'listen': html = viewListen(); tab = 'home'; break;
-      case 'passage': html = viewPassage(); tab = 'home'; break;
-      case 'video': html = viewVideo(); tab = 'home'; break;
+      case 'mine': html = viewMine(); tab = 'home'; break;
+      case 'lookback': html = viewLookBack(); tab = 'home'; break;
+      case 'talk': html = viewTalk(); tab = 'talk'; break;
+      case 'listen': html = viewListen(); tab = 'listen'; break;
+      case 'passage': html = viewPassage(); tab = 'listen'; break;
+      case 'video': html = viewVideo(); tab = 'listen'; break;
       case 'rp': html = viewRp(); break;
       case 'aichat': html = viewAiChat(); break;
-      case 'aidone': html = viewAiDone(); tab = 'home'; break;
+      case 'aidone': html = viewAiDone(); tab = 'talk'; break;
       case 'words': html = viewWords(); tab = 'words'; break;
       case 'deck': html = viewDeck(); tab = 'words'; break;
       case 'words-session': html = viewWordSession(); break;
@@ -1625,16 +1642,12 @@ h1.display { font-weight: 800; }
       '<div class="htile quiet soft-sunset"><span class="tile-n icon">' + SHUFFLE + '</span><span class="tile-label">Mix</span><span class="tile-sub">単元を始めると使えます</span></div>';
     parts.push('<div class="tiles2">' + rev + mix + '</div>');
 
-    const mk = mistakeKeys().length, wd = wordDue().length, stars = starredWords().length;
+    const mk = mistakeKeys().length, wd = wordDue().length;
     parts.push('<div class="actions">' +
-      actRow('toListen', 'listen', ['#0a84ff', '#5e5ce6'], 'Listening', '長文リスニング：聞いて質問に答える', '') +
-      actRow('toTalk', 'talk', ['#ff375f', '#ff9f0a'], 'Conversation', '会話練習：ロールプレイとAIとの会話', '') +
-      actRow('tab" data-v="words', 'words', ['#1f9d55', '#6fd08f'], 'Word books', '単語帳 — ' + DECKS.reduce((n, d) => n + d.words.length, 0) + '語', wd ? wd + ' to review' : '') +
+      (wd ? actRow('wordReview', 'words', ['#1f9d55', '#6fd08f'], 'Word review', '単語の復習', wd + '') : '') +
       (mk ? actRow('startMistakes', 'retry', ['#ff4d2e', '#ff9f1c'], 'Retry mistakes', '間違えた問題をやり直す', mk + '') : '') +
-      (stars ? actRow('startStarred', 'star', ['#c47a00', '#f2c230'], 'Starred words', '星を付けた単語', stars + '') : '') +
-      (S.log.length ? actRow('toLookBack', 'lookback', ['#0a84ff', '#64d2ff'], 'Look back', '振り返り：最近の結果と間違えた問題', '') : '') +
-      actRow('tab" data-v="browse', 'browse', ['#6e4ef2', '#b07cff'], 'Explore', '文法・場面から選ぶ', '') +
-      '</div><div class="list">' + toggleRow('quiet', 'Quiet mode', '声を出せないとき', S.settings.quiet) + '</div>');
+      (S.log.length ? actRow('toLookBack', 'lookback', ['#0a84ff', '#64d2ff'], 'Look back', '最近の結果と間違えた問題', '') : '') +
+      actRow('toRecord', 'record', ['#5e5ce6', '#9d8cff'], 'Progress & settings', '記録・設定・データの保存', '') + '</div>');
     return '<div class="stack-lg">' + parts.join('') + '</div>';
   }
   // Today's answers against a daily goal, and how many days in a row the learner has studied.
@@ -1658,6 +1671,7 @@ h1.display { font-weight: 800; }
     star: '<path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/>',
     browse: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>',
     lookback: '<path d="M4 12a8 8 0 1 0 2.3-5.6"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>',
+    record: '<path d="M6 19v-6M12 19V6M18 19v-9"/>',
     listen: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
     talk: '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 3.5V16a2.5 2.5 0 0 1-2-2.5z"/>'
   };
@@ -1687,31 +1701,25 @@ h1.display { font-weight: 800; }
     return '<button class="item unit-item' + (st === 'planned' ? ' disabled' : '') + '" data-act="openUnit" data-id="' + u.id + '" data-from="' + (from || 'course') + '"' + toneStyle(u.id) + '>' +
       '<span class="badge s-' + st + '">' + unitLabel(u.id) + '</span><span class="grow">' + esc(u.title) + '</span>' + chip(st) + chev() + '</button>';
   }
+  const COURSE_MODES = [['path', 'Path', 'コースの順番どおりに進める'], ['grammar', 'Grammar', '文法の項目から選ぶ'],
+    ['role', 'Role', '文の中での働きから選ぶ（名詞・副詞の働きなど）'], ['scene', 'Scene', '場面ごとの例文と単元']];
   function viewCourse() {
-    const out = ['<header class="page-head mesh alt"><h1 class="large">Course</h1><p class="muted">Start anywhere.</p><p class="ja-sub">どこから始めても大丈夫です</p></header>'];
-    let n = 0;
-    CUR.stages.forEach(s => {
-      const units = CUR.units.filter(u => u.stage === s.id);
-      const label = s.id === 's0' ? 'Alongside the course' : 'Stage ' + (++n);
-      const t = TONES[s.id] || TONES.s1;
-      out.push('<section class="stack"><div class="stage" style="--tone:' + t[0] + ';--tone2:' + t[1] + '">' + art(units[0].id, 'stage-art') +
-        '<p class="stage-label">' + label + ' — ' + units.length + ' units</p><h2>' + esc(s.title.replace('（並行して進める）', '')) + '</h2><p class="stage-goal">' + esc(s.goal) + '</p></div>' +
-        '<div class="list">' + units.map(u => unitRow(u, 'course')).join('') + '</div></section>');
-    });
-    return '<div class="stack-lg">' + out.join('') + '</div>';
-  }
-
-  // ---- browse by grammar / scene
-  function viewBrowse() {
-    const seg = '<div class="seg" role="group" aria-label="Sort by">' +
-      '<button data-act="browseMode" data-m="grammar" aria-pressed="' + (ui.browse === 'grammar') + '">Grammar</button>' +
-      '<button data-act="browseMode" data-m="role" aria-pressed="' + (ui.browse === 'role') + '">Role</button>' +
-      '<button data-act="browseMode" data-m="scene" aria-pressed="' + (ui.browse === 'scene') + '">Scene</button></div>';
+    const mode = segMode('course', COURSE_MODES);
     let body = '';
-    if (ui.browse === 'role') {
+    if (mode === 'path') {
+      let n = 0;
+      body = CUR.stages.map(s => {
+        const units = CUR.units.filter(u => u.stage === s.id);
+        const label = s.id === 's0' ? 'Alongside the course' : 'Stage ' + (++n);
+        const t = TONES[s.id] || TONES.s1;
+        return '<section class="stack"><div class="stage" style="--tone:' + t[0] + ';--tone2:' + t[1] + '">' + art(units[0].id, 'stage-art') +
+          '<p class="stage-label">' + label + ' — ' + units.length + ' units</p><h2>' + esc(s.title.replace('（並行して進める）', '')) + '</h2><p class="stage-goal">' + esc(s.goal) + '</p></div>' +
+          '<div class="list">' + units.map(u => unitRow(u, 'course')).join('') + '</div></section>';
+      }).join('');
+    } else if (mode === 'role') {
       body = CUR.roles.map(r => '<section class="stack"><div class="sec-head"><h3>' + esc(r.title) + '</h3><p class="small muted">' + esc(r.desc) + '</p></div><div class="list">' +
           r.units.map(id => unitRow(META[id], 'browse')).join('') + '</div></section>').join('');
-    } else if (ui.browse === 'grammar') {
+    } else if (mode === 'grammar') {
       body = CUR.grammar.map(g => {
         const units = CUR.units.filter(u => u.grammar.includes(g.id));
         if (!units.length) return '';
@@ -1724,7 +1732,8 @@ h1.display { font-weight: 800; }
           '</span><span class="small muted">' + n + ' examples</span>' + chev() + '</button>';
       }).join('') + '</div>';
     }
-    return '<div class="stack-lg"><header class="page-head"><h1 class="large">Explore</h1><p class="muted">Pick by grammar, role or scene.</p><p class="ja-sub">文法や場面から選べます。記録はコースと共通です</p></header>' + seg + body + '</div>';
+    return '<div class="stack-lg"><header class="page-head mesh alt"><h1 class="large">Course</h1><p class="ja-sub">どこから始めても大丈夫です</p></header>' +
+      segBar('course', COURSE_MODES) + body + '</div>';
   }
   function exampleCount(sceneId) {
     return Object.values(UNITS).reduce((n, u) => n + u.examples.filter(e => e.scene === sceneId).length, 0);
@@ -2280,14 +2289,13 @@ h1.display { font-weight: 800; }
     const mk = mistakeKeys().length;
     const voices = tts.voices();
     const confirm = ui.confirm;
-    return '<div class="stack-lg"><header class="page-head"><h1 class="large">Progress</h1><p class="ja-sub">記録</p></header>' +
+    return topbar('Progress', 'toHome') + '<div class="stack-lg"><header class="page-head"><h1 class="large">Progress</h1><p class="ja-sub">記録と設定</p></header>' +
       '<div class="stats"><div class="stat"><b>' + today + '</b><span>Answers today</span></div><div class="stat"><b>' + days + '</b><span>Study days</span></div><div class="stat"><b>' + solid + '</b><span>Mastered</span></div></div>' +
       '<details class="disclosure"><summary>' + bi('Units', '単元ごとの状態') + '</summary><div class="body"><p class="small muted">Outlined: in progress. Filled: done.<span class="ja-sub">番号の色：枠だけは学習中、塗りは一通り終了。間隔をあけた復習で正解を重ねると「定着」になります</span></p>' +
       '<div class="list">' + ready.map(u => unitRow(u, 'record')).join('') + '</div></div></details>' +
       '<section class="stack"><h2>Practice</h2><div class="list">' +
-      '<button class="item" data-act="toLookBack"><span class="grow">' + bi('Look back', '振り返り') + '</span>' + chev() + '</button>' +
+      '<button class="item" data-act="toLookBack" data-from="record"><span class="grow">' + bi('Look back', '振り返り') + '</span>' + chev() + '</button>' +
       '<button class="item" data-act="startMistakes"' + (mk ? '' : ' disabled') + '><span class="grow">' + bi('Retry mistakes', '間違えた問題をやり直す') + '</span><span class="muted">' + mk + '</span>' + chev() + '</button>' +
-      '<button class="item" data-act="startMix"' + (mixKeys().length ? '' : ' disabled') + '><span class="grow">' + bi('Mix', 'まぜて練習') + '</span>' + chev() + '</button>' +
       '<button class="item" data-act="tab" data-v="mine"><span class="grow">' + bi('My sentences', '自分で作った英文') + '</span><span class="muted">' + S.mine.length + '</span>' + chev() + '</button></div></section>' +
       '<section class="stack"><h2>Settings</h2><div class="list">' +
       toggleRow('quiet', 'Quiet mode', '声を出せないとき。話す問題で「書いて確認する」欄を最初から開きます', S.settings.quiet) +
@@ -2406,20 +2414,25 @@ h1.display { font-weight: 800; }
   // iPhone only lets a page speak after a tap; saying nothing inside the tap allows a later reply to be read aloud.
   function unlockSpeech() { try { if (tts.ok && !ui.spoke) { speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); ui.spoke = true; } } catch (e) { /* optional */ } }
 
+  const TALK_MODES = [['rp', 'Role-play', ''], ['skills', 'Skills', '会話を続けるスキル（U42〜U47）'], ['ai', 'AI', 'AI と自由に話す・声で話す（claude.ai）']];
   function viewTalk() {
     const ai = aiState();
-    return '<div class="stack-lg"><header class="page-head"><h1 class="large">Conversation</h1><p class="ja-sub">会話練習：場面ごとのロールプレイと、AIとの自由な会話</p></header>' +
-      '<button class="ai-card" data-act="' + (ai === 'on' ? 'toAiChat' : ai === 'off' ? 'openClaude' : 'noop') + '"><span class="ai-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 3.5V16h0a2.5 2.5 0 0 1-2-2.5z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></svg></span>' +
+    const modes = TALK_MODES.map(m => m[0] === 'rp' ? [m[0], m[1], '相手のセリフに英語で答える（' + SCENES_RP.length + '場面）'] : m);
+    const mode = segMode('talk', modes);
+    let body = '';
+    if (mode === 'ai') {
+      body = '<button class="ai-card" data-act="' + (ai === 'on' ? 'toAiChat' : ai === 'off' ? 'openClaude' : 'noop') + '"><span class="ai-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4 3.5V16h0a2.5 2.5 0 0 1-2-2.5z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></svg></span>' +
       '<span class="grow"><b class="en-main">Talk freely with AI</b><span class="ja-sub">' + (ai === 'on' ? 'AIが相手。何を話しても英語で返事をして、不自然なところはやさしく直します' : ai === 'off' ? 'Claude で開きます（AIとの会話は claude.ai 版だけで使えます）' : '準備しています…') + '</span></span>' + chev() + '</button>' +
-      '<details class="disclosure voice-card"><summary>' + bi('Real-time voice practice', 'リアルタイムで声の会話（Claude アプリの音声モード）') + '</summary><div class="body">' +
+      '<section class="card stack voice-card"><h2>' + bi('Real-time voice practice', '声でリアルタイムに話す（Claude アプリの音声モード）') + '</h2>' +
         '<ol class="steps"><li>下の「Copy instructions」で指示文をコピーします。</li><li>「Open Claude」で Claude を開き、新しいチャットに貼り付けて送ります。</li>' +
         '<li>Claude の返事が出たら、入力欄の横の音声モード（波形のアイコン）をタップします。あとは英語で話すだけです。</li>' +
         '<li>困ったら help、日本語で説明してほしいときは Japanese, please、終わるときは Let\'s finish と言います。</li></ol>' +
         '<p class="small muted">音声モードは無料プランでも使えますが、ふだんのチャットと同じ利用枠を使います。</p>' +
-        '<div class="pair"><button class="pill soft block" data-act="copyVoice">Copy instructions</button><button class="pill primary block" data-act="openClaudeNew">Open Claude</button></div></div></details>' +
-      '<section class="stack"><h2>' + bi('Conversation skills', '会話を続けるスキル（U42〜U47）') + '</h2><div class="list">' + CUR.units.filter(u => u.stage === 's7').map(u => unitRow(u, 'talk')).join('') + '</div></section>' +
-      '<section class="stack"><h2>' + bi('Role-play', '場面別ロールプレイ（' + SCENES_RP.length + '場面）') + '</h2>' +
-      '<div class="jump">' + RP_CATS.filter(c => SCENES_RP.some(sc => sc.cat === c[0])).map(c => '<button data-act="jumpGroup" data-g="rp-' + c[0] + '">' + esc(c[2]) + '</button>').join('') + '</div>' +
+        '<div class="pair"><button class="pill soft block" data-act="copyVoice">Copy instructions</button><button class="pill primary block" data-act="openClaudeNew">Open Claude</button></div></section>';
+    } else if (mode === 'skills') {
+      body = '<div class="list">' + CUR.units.filter(u => u.stage === 's7').map(u => unitRow(u, 'talk')).join('') + '</div>';
+    } else {
+      body = '<div class="jump">' + RP_CATS.filter(c => SCENES_RP.some(sc => sc.cat === c[0])).map(c => '<button data-act="jumpGroup" data-g="rp-' + c[0] + '">' + esc(c[2]) + '</button>').join('') + '</div>' +
       RP_CATS.map(c => {
         const list = SCENES_RP.filter(sc => sc.cat === c[0]);
         if (!list.length) return '';
@@ -2428,7 +2441,9 @@ h1.display { font-weight: 800; }
           return '<button class="rp-card" data-act="openRp" data-id="' + sc.id + '" style="--a:' + sc.tone[0] + ';--b:' + sc.tone[1] + '"><span class="rp-t">' + esc(sc.title) + '</span><span class="rp-j">' + esc(sc.titleJa) + '</span>' +
             '<span class="rp-n">' + sc.turns.length + ' turns' + (r ? '　Best ' + r.best + '/' + r.n : '') + '</span></button>';
         }).join('') + '</div>';
-      }).join('') + '</section></div>';
+      }).join('');
+    }
+    return '<div class="stack-lg"><header class="page-head mesh alt"><h1 class="large">Conversation</h1><p class="ja-sub">話す練習</p></header>' + segBar('talk', modes) + body + '</div>';
   }
 
   function openRp(id) {
@@ -2644,28 +2659,31 @@ h1.display { font-weight: 800; }
     return h + actionbar(VS.checked ? '<div class="pair"><button class="pill soft block" data-act="openVideo" data-id="' + v.id + '">Try again</button><button class="pill primary block" data-act="toListen">Done</button></div>'
       : '<button class="pill primary block" data-act="vcheck"' + (all ? '' : ' disabled') + '>Check answers</button>');
   }
+  const LISTEN_MODES = [['audio', 'Audio', 'アプリの録音で聞く会話・案内（20〜45秒）'], ['bbc', 'BBC', 'BBC の番組：ネイティブ2人の自然な会話'], ['ted', 'TED', 'TED のスピーチ。長いものは範囲を指定']];
+  const scoreTag = r => r ? '<span class="muted small">' + r.best + '/' + r.n + '</span>' : '';
   function viewListen() {
-    return '<div class="stack-lg"><header class="page-head"><h1 class="large">Listening</h1><p class="ja-sub">長文リスニング：聞いて、質問に答える</p></header>' +
-      (VIDEOS.length ? '<section class="stack"><h2>' + bi('Real English videos', 'ネイティブの自然な会話（動画）') + '</h2><p class="small muted">' + bi('Two native speakers chatting at natural speed. Each video teaches one expression.', 'BBC Learning English の番組。2人のネイティブが自然な速さで話します（各2〜3分）。問題はこのアプリのオリジナルです。') + '</p><div class="list">' +
-        VIDEOS.map(v => { const r = (S.vs || {})[v.id]; return '<button class="item ls-item" data-act="openVideo" data-id="' + v.id + '"><span class="ls-type">Video</span><span class="grow"><b class="en-main">' + esc(v.expr) + '</b><span class="ja-sub">' + esc(v.meaning) + '</span></span>' + (r ? '<span class="muted small">' + r.best + '/' + r.n + '</span>' : '') + chev() + '</button>'; }).join('') + '</div></section>' : '') +
-      (TALKS.length ? '<section class="stack"><h2>' + bi('TED Talks', 'TEDトーク（ネイティブのスピーチ）') + '</h2><p class="small muted">' + bi('Talks by native speakers at natural speed, in TED\'s own player.', 'TED の公式プレーヤーで再生します。長いトークは聞く範囲を決めてあります。問題はこのアプリのオリジナルです。') + '</p>' +
-        TED_GROUPS.map(([g, en, ja]) => {
-          const list = TALKS.filter(t => t.group === g);
-          return list.length ? '<h3 class="ted-group">' + bi(en, ja) + '</h3><div class="list">' + list.map(t => {
-            const r = (S.vs || {})[t.id];
-            return '<button class="item ls-item" data-act="openVideo" data-id="' + t.id + '"><span class="ls-type ted">TED</span><span class="grow"><b class="en-main">' + esc(t.title) + '</b><span class="ja-sub">' + esc(t.speaker) + '　' + (t.part === '全編' ? clock(t.length) : esc(t.part)) + '</span></span>' +
-              (r ? '<span class="muted small">' + r.best + '/' + r.n + '</span>' : '') + chev() + '</button>';
-          }).join('') + '</div>' : '';
-        }).join('') + '</section>' : '') +
-      LEVELS.map(([lv, en, ja]) => {
+    const mode = segMode('listen', LISTEN_MODES);
+    let body = '';
+    if (mode === 'bbc') {
+      body = '<div class="list">' + VIDEOS.map(v => '<button class="item ls-item" data-act="openVideo" data-id="' + v.id + '"><span class="grow"><b class="en-main">' + esc(v.expr) + '</b><span class="ja-sub">' + esc(v.meaning) + '</span></span>' +
+        scoreTag((S.vs || {})[v.id]) + chev() + '</button>').join('') + '</div>';
+    } else if (mode === 'ted') {
+      body = TED_GROUPS.map(([g, en, ja]) => {
+        const list = TALKS.filter(t => t.group === g);
+        return list.length ? '<section class="stack"><h2>' + bi(en, ja) + '</h2><div class="list">' + list.map(t =>
+          '<button class="item ls-item" data-act="openVideo" data-id="' + t.id + '"><span class="grow"><b class="en-main">' + esc(t.title) + '</b><span class="ja-sub">' + esc(t.speaker) + '　' + (t.part === '全編' ? clock(t.length) : esc(t.part)) + '</span></span>' +
+          scoreTag((S.vs || {})[t.id]) + chev() + '</button>').join('') + '</div></section>' : '';
+      }).join('');
+    } else {
+      body = LEVELS.map(([lv, en, ja]) => {
         const list = PASSAGES.filter(p => p.level === lv);
-        if (!list.length) return '';
-        return '<section class="stack"><h2>' + bi(en, ja) + '</h2><div class="list">' + list.map(p => {
-          const r = (S.ls || {})[p.id];
-          return '<button class="item ls-item" data-act="openPassage" data-id="' + p.id + '"><span class="ls-type">' + esc(p.type) + '</span><span class="grow"><b class="en-main">' + esc(p.title) + '</b><span class="ja-sub">' + esc(p.titleJa) + '</span></span>' +
-            (r ? '<span class="muted small">' + r.best + '/' + r.n + '</span>' : '') + chev() + '</button>';
-        }).join('') + '</div></section>';
-      }).join('') + '</div>';
+        return list.length ? '<section class="stack"><h2>' + bi(en, ja) + '</h2><div class="list">' + list.map(p =>
+          '<button class="item ls-item" data-act="openPassage" data-id="' + p.id + '"><span class="grow"><b class="en-main">' + esc(p.title) + '</b><span class="ja-sub"><span class="ls-type sm">' + esc(p.type) + '</span>' + esc(p.titleJa) + '</span></span>' +
+          scoreTag((S.ls || {})[p.id]) + chev() + '</button>').join('') + '</div></section>' : '';
+      }).join('');
+    }
+    return '<div class="stack-lg"><header class="page-head mesh"><h1 class="large">Listening</h1><p class="ja-sub">聞いて、質問に答える</p></header>' + segBar('listen', LISTEN_MODES) + body +
+      (mode === 'audio' ? '' : '<p class="small muted">' + (mode === 'ted' ? 'TED Talks © TED Conferences, LLC。' : 'BBC Learning English『The English We Speak』。') + '動画は公式プレーヤーで再生します。問題はこのアプリのオリジナルです。</p>') + '</div>';
   }
   function viewPassage() {
     const p = PASSAGE[LS.id], key = lkey(p.id);
@@ -2752,7 +2770,7 @@ h1.display { font-weight: 800; }
     const misses = recentMisses();
     const qMiss = misses.filter(k => !k.startsWith('w:')), wMiss = misses.filter(k => k.startsWith('w:'));
     const tests = Object.keys(S.tests).filter(id => UNITS[id]);
-    return topbar('Look back', 'toRecord') + '<div class="stack-lg"><header class="page-head"><h1 class="large">Look back</h1><p class="ja-sub">振り返り：この1週間の学習と、まだ正解できていない問題</p></header>' +
+    return topbar('Look back', V.from === 'record' ? 'toRecord' : 'toHome') + '<div class="stack-lg"><header class="page-head"><h1 class="large">Look back</h1><p class="ja-sub">振り返り：この1週間の学習と、まだ正解できていない問題</p></header>' +
       '<div class="card">' + bars + '<p class="small muted">' + bi('Light bar: answers. Dark bar: correct.', '薄い棒：答えた数　濃い棒：正解した数') + '</p></div>' +
       '<div class="stats"><div class="stat"><b>' + week.length + '</b><span>Answers this week</span></div><div class="stat"><b>' + (week.length ? Math.round(100 * wOk / week.length) + '%' : '–') + '</b><span>Correct</span></div><div class="stat"><b>' + unitsTouched + ' / ' + wordsTouched + '</b><span>Units / words</span></div></div>' +
       (tests.length ? '<section class="stack"><h2>' + bi('Challenge tests', '応用テストの結果') + '</h2><div class="list">' + tests.map(id => '<button class="item" data-act="startTest" data-id="' + id + '"><span class="grow"><b>' + esc(unitLabel(id)) + '</b> ' + esc(META[id].title) + '<span class="ja-sub">最高 ' + S.tests[id].best + ' / ' + S.tests[id].n + '　前回 ' + S.tests[id].last + '（' + esc(fmtDay(S.tests[id].at)) + '）</span></span>' + chev() + '</button>').join('') + '</div></section>' : '') +
@@ -3003,10 +3021,10 @@ h1.display { font-weight: 800; }
     back: () => go('home'),
     toHome: () => go('home'),
     toCourse: () => go('course'),
-    toBrowse: () => go('browse'),
+    toBrowse: () => go('course'),
     toRecord: () => go('record'),
     toUnit: () => go('unit', { id: V.id, from: V.from }),
-    browseMode: el => { ui.browse = el.dataset.m; render(); },
+    seg: el => { ui[el.dataset.k] = el.dataset.m; setPref(el.dataset.k, el.dataset.m); render(); },
     openScene: el => go('scene', { id: el.dataset.id }),
     openUnit: el => go('unit', { id: el.dataset.id, from: el.dataset.from || V.name }),
     readUnit: el => go('read', { id: el.dataset.id, from: V.from }),
@@ -3079,7 +3097,7 @@ h1.display { font-weight: 800; }
     finishAndTest: () => { const id = L.id; actions.finishUnit(); startTest(id); },
     startTest: el => startTest(el.dataset.id),
     retryMissed: () => { const keys = L.missed.slice(); const test = L.test; startSession('mistakes', keys, { test }); },
-    toLookBack: () => go('lookback'),
+    toLookBack: el => go('lookback', { from: el && el.dataset.from }),
     toListen: () => { player.stop(); LS = null; go('listen'); },
     openPassage: el => { player.stop(); LS = { id: el.dataset.id, picks: [], checked: false }; player.load('l-' + el.dataset.id); go('passage'); },
     lplay: el => { if (LS) player.play(lkey(LS.id), !!el.dataset.slow); },
