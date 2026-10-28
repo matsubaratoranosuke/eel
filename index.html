@@ -72,6 +72,8 @@
 }
 
 * { box-sizing: border-box; }
+/* No pull-to-refresh or rubber-band bounce at the page edges, so a stray swipe never reloads the app. */
+html, body { overscroll-behavior-y: none; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -1304,6 +1306,9 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     S.log.push({ d: today, k: key, r: result });
     if (S.log.length > 1500) S.log = S.log.slice(-1200);
   }
+  // A question or word asked again in the same session, after a miss, counts toward today's answers but leaves the
+  // review record alone: the first try already set when it comes back, and it stays in "Retry mistakes".
+  function countOnly() { const d = dayStr(); S.days[d] = (S.days[d] || 0) + 1; }
   const keysOf = uid => UNITS[uid].practice.map(q => uid + '.' + q.id);
   const qOf = key => {
     const [uid, qid] = key.split('.');
@@ -1655,6 +1660,58 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   const PREF_KEY = 'eel-ui';
   const prefs = (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch (e) { return {}; } })();
   function setPref(k, v) { prefs[k] = v; try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) { /* optional */ } }
+  // Picking up where you left off: iPhone may close a home-screen web app while it is in the background, and a reload
+  // starts the page again. The screen and any session in progress are kept after every change (this device only),
+  // and a launch within a few hours opens them again instead of the title screen.
+  const RESUME_KEY = 'eel-resume', RESUME_MS = 6 * 3600 * 1000;
+  function saveResume() {
+    const w = W && Object.assign({}, W, { items: W.items.map(it => ({ d: it.d, i: it.i, mode: it.mode, again: it.again, res: it.res })) });
+    const r = R && Object.assign({}, R, { typed: '' });
+    try { localStorage.setItem(RESUME_KEY, JSON.stringify({ at: Date.now(), V, L, W: w, R: r, LS, VS, y: window.scrollY })); } catch (e) { /* optional */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveResume(); });
+  window.addEventListener('pagehide', saveResume);
+  // Rebuild the saved screen's state; false when there is nothing recent to return to or it no longer fits the content.
+  function restoreResume() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(RESUME_KEY)); } catch (e) { /* nothing saved */ }
+    if (!s || !s.V || !(Date.now() - s.at < RESUME_MS)) return false;
+    const n = s.V.name;
+    if (n === 'lesson') {
+      const l = s.L;
+      if (!l) return false;
+      if (l.type === 'unit') {
+        if (!UNITS[l.id] || !S.units[l.id]) return false;
+        L = { type: 'unit', id: l.id, idx: S.units[l.id].pos };
+      } else {
+        // keep only questions this device can build, and the place among them
+        const kept = (l.queue || []).map((k, i) => [k, i]).filter(x => qOf(x[0]));
+        const before = n => kept.filter(x => x[1] < n).length;
+        L = Object.assign({}, l, { queue: kept.map(x => x[0]), idx: before(l.idx), n0: before(l.n0 == null ? l.queue.length : l.n0), missed: (l.missed || []).filter(qOf), right: l.right || 0 });
+        if (!L.queue.length) { L = null; return false; }
+        if (L.kind === 'review') S.review = L.idx < L.queue.length ? { queue: L.queue, idx: L.idx, n0: L.n0 } : null;
+      }
+      loadLessonSound();
+    } else if (n === 'words-session') {
+      const w = s.W;
+      if (!w || !w.items || !w.items.length || !w.items.every(it => DECK[it.d] && DECK[it.d].words[it.i])) return false;
+      W = w;
+      while (W.items[W.idx] && W.items[W.idx].res) W.idx++; // answered just before closing: go on to the next word
+      [...new Set(W.items.map(it => it.d))].forEach(d => player.load('w-' + d));
+    } else if (n === 'rp') {
+      if (!s.R || !RP[s.R.id]) return false;
+      R = s.R; player.load('r-' + R.id);
+    } else if (n === 'passage') {
+      if (!s.LS || !PASSAGE[s.LS.id]) return false;
+      LS = s.LS; player.load('l-' + LS.id);
+    } else if (n === 'video') {
+      if (!s.VS || !VIDEO[s.VS.id]) return false;
+      VS = s.VS;
+    }
+    // a conversation with AI can't be picked up again; its list is the nearest place
+    V = n === 'aichat' || n === 'aidone' ? { name: 'talk' } : s.V;
+    return { y: s.y || 0 };
+  }
   let ui = { course: prefs.course || 'path', listen: prefs.listen || 'audio', talk: prefs.talk || 'rp', confirm: null, flash: '', screen: '', bar: 0, fc: null };
 
   function go(name, params) {
@@ -1740,6 +1797,7 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     enableWaiting();
     const focus = app.querySelector('[data-autofocus]');
     if (focus && window.matchMedia('(pointer: fine)').matches) focus.focus();
+    saveResume();
   }
 
   const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -2033,16 +2091,17 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   function startSession(kind, keys, extra) {
     keys = keys.filter(qOf);
     if (!keys.length) return;
-    if (kind === 'review') { S.review = { queue: keys, idx: 0 }; persist(); }
-    enterLesson(Object.assign({ type: 'session', kind, queue: keys, idx: 0, missed: [], right: 0 }, extra || {}));
+    if (kind === 'review') { S.review = { queue: keys, idx: 0, n0: keys.length }; persist(); }
+    enterLesson(Object.assign({ type: 'session', kind, queue: keys, idx: 0, n0: keys.length, missed: [], right: 0 }, extra || {}));
   }
   function enterLesson(l) {
     L = l; Q = null; ui.fc = null; ui.bar = 0;
-    // start fetching the sound for this lesson while its first screen is read
-    (L.type === 'unit' ? [L.id] : [...new Set(L.queue.map(k => k.split('.')[0]))]).forEach(id => player.load(id));
+    loadLessonSound();
     go('lesson');
     onCard();
   }
+  // start fetching the sound for this lesson while its first screen is read
+  function loadLessonSound() { (L.type === 'unit' ? [L.id] : [...new Set(L.queue.map(k => k.split('.')[0]))]).forEach(id => player.load(id)); }
   // Called whenever a lesson screen changes: word cards say the first word right away.
   function onCard() {
     if (!L) return;
@@ -2095,12 +2154,12 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
       return top + body;
     }
     // review / mistakes / mixed session
-    const total = L.queue.length;
+    const total = L.queue.length, n0 = L.n0 || total;
     const sessionName = { review: 'Review', mistakes: 'Retry', mix: 'Mix', test: 'Challenge test' }[L.kind];
     if (L.idx >= total && L.kind === 'test') {
-      const rate = L.right / total;
+      const rate = L.right / n0;
       const msg = rate >= 0.8 ? ['Excellent!', 'よくできました。応用もばっちりです'] : rate >= 0.5 ? ['Good effort!', 'あと少し。間違えた問題を見直しましょう'] : ['Keep going!', '間違えた問題を見直して、もう一度挑戦しましょう'];
-      return lessonBar(total, total) + '<div class="screen-done"><div class="score-ring" style="--p:' + Math.round(rate * 100) + '"><b>' + L.right + '</b><span>/ ' + total + '</span></div>' +
+      return lessonBar(total, total) + '<div class="screen-done"><div class="score-ring" style="--p:' + Math.round(rate * 100) + '"><b>' + L.right + '</b><span>/ ' + n0 + '</span></div>' +
         '<h1 class="display">' + bi(msg[0], msg[1]) + '</h1><p class="lead">' + esc(unitLabel(L.test)) + ' ' + esc(META[L.test].title) + '</p></div>' +
         (L.missed.length ? '<section class="stack"><h2>' + bi('Look back', '間違えた問題の振り返り') + '</h2>' + L.missed.map(missRow).join('') + '</section>' : '') +
         actionbar('<div class="pair">' + (L.missed.length ? '<button class="pill soft block" data-act="retryMissed">Retry missed</button>' : '') + '<button class="pill primary block" data-act="quit">Done</button></div>');
@@ -2108,13 +2167,13 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     if (L.idx >= total) {
       const nd = nextDue();
       return lessonBar(total, total) + '<div class="screen-done"><svg class="done-mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="29"/><path d="M19 33.5 28 42l17-19"/></svg>' +
-        '<h1 class="display">' + bi('Well done!', 'おつかれさまでした') + '</h1><p class="lead">' + sessionName + ': ' + total + ' questions.' + (nd ? ' Next review: ' + fmtDay(nd.day) + '.' : '') + '</p></div>' +
+        '<h1 class="display">' + bi('Well done!', 'おつかれさまでした') + '</h1><p class="lead">' + sessionName + ': ' + n0 + ' questions' + (total > n0 ? ', ' + (total - n0) + ' asked again' : '') + '.' + (nd ? ' Next review: ' + fmtDay(nd.day) + '.' : '') + '</p></div>' +
         actionbar('<button class="pill primary block" data-act="quit">Home</button>');
     }
     const key = L.queue[L.idx];
     if (!Q || Q.key !== key) Q = newQ(key);
     const [uid] = key.split('.');
-    return lessonBar(L.idx + 1, total) + viewQuestion(Q, unitLabel(uid));
+    return lessonBar(L.idx + 1, total) + viewQuestion(Q, L.idx >= n0 ? 'Try again' : unitLabel(uid));
   }
 
   // Word cards: tap to turn over; swipe right (or "Got it") takes the card out, swipe left (or "Not yet") keeps it for later.
@@ -2424,25 +2483,27 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   function commit(result) {
     const r = result || Q.result;
     if (!r) return;
-    grade(Q.key, r);
+    const again = L.type === 'unit' ? !!unitCards(L.id)[L.idx].retry : L.idx >= (L.n0 || L.queue.length);
+    if (again) countOnly(); else grade(Q.key, r);
     if (Q.q.type === 'self' && Q.typed.trim()) {
       S.mine.unshift({ text: Q.typed.trim().slice(0, 400), key: Q.key, at: dayStr() });
       S.mine = S.mine.slice(0, 200);
     }
     if (L.type === 'unit') {
       const st = S.units[L.id];
-      const cards = unitCards(L.id);
-      const isRetry = cards[L.idx].retry;
-      if (r !== 'ok' && !isRetry && !st.extra.includes(Q.q.id)) st.extra.push(Q.q.id);
+      // Not right yet: it comes back at the end, as often as needed, so the unit ends only when every question is right.
+      if (r !== 'ok' && !unitCards(L.id).slice(L.idx + 1).some(c => c.retry && c.q === Q.q.id)) st.extra.push(Q.q.id);
       L.idx++;
       st.pos = L.idx; st.lastAt = Date.now();
     } else {
-      if (r === 'ok') L.right++; else L.missed.push(Q.key);
+      if (L.n0 == null) L.n0 = L.queue.length;
+      if (!again) { if (r === 'ok') L.right++; else L.missed.push(Q.key); } // the score is the first tries
+      if (r !== 'ok' && !L.queue.slice(L.idx + 1).includes(Q.key)) L.queue.push(Q.key);
       L.idx++;
-      if (L.kind === 'review') { S.review.idx = L.idx; if (L.idx >= L.queue.length) S.review = null; }
+      if (L.kind === 'review') S.review = L.idx < L.queue.length ? { queue: L.queue, idx: L.idx, n0: L.n0 } : null;
       if (L.kind === 'test' && L.idx >= L.queue.length) {
         const t = S.tests[L.test] || (S.tests[L.test] = { best: 0 });
-        t.last = L.right; t.n = L.queue.length; t.best = Math.max(t.best || 0, L.right); t.at = dayStr();
+        t.last = L.right; t.n = L.n0; t.best = Math.max(t.best || 0, L.right); t.at = dayStr();
       }
     }
     Q = null;
@@ -3078,6 +3139,8 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
 
   // A study session: up to ten words, those not yet learned first, each shown in the chosen way.
   let W = null;
+  // n0: the words it started with. Words not right yet are added again at the end (again: true).
+  const wordSession = (items, review) => ({ items, idx: 0, right: 0, n0: items.length, review: !!review });
   function startWords(deckId, mode) {
     const d = DECK[deckId];
     let pool = d.words.map((w, i) => i);
@@ -3085,7 +3148,7 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     const today = dayStr();
     const rank = i => { const r = S.items[wkey(deckId, d.words[i])]; return !r ? 1 : r.due && r.due <= today ? 0 : 2 + r.box; };
     pool = shuffle(pool).sort((a, b) => rank(a) - rank(b)).slice(0, 10);
-    W = { items: shuffle(pool).map(i => ({ d: deckId, i, mode })), idx: 0, right: 0 };
+    W = wordSession(shuffle(pool).map(i => ({ d: deckId, i, mode })));
     player.load('w-' + deckId);
     go('words-session');
     sayWord();
@@ -3094,7 +3157,7 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   // A word session over a given list of [deck, index] pairs (starred words, words missed recently).
   function startWordItems(list) {
     if (!list.length) return;
-    W = { items: list.map(([d, i]) => { const w = DECK[d].words[i]; const ms = canSpell(w) ? ['cards', 'quiz', 'listen', 'spell'] : ['cards', 'quiz', 'listen']; return { d, i, mode: ms[Math.floor(Math.random() * ms.length)] }; }), idx: 0, right: 0, review: true };
+    W = wordSession(list.map(([d, i]) => { const w = DECK[d].words[i]; const ms = canSpell(w) ? ['cards', 'quiz', 'listen', 'spell'] : ['cards', 'quiz', 'listen']; return { d, i, mode: ms[Math.floor(Math.random() * ms.length)] }; }), true);
     [...new Set(list.map(x => x[0]))].forEach(d => player.load('w-' + d));
     go('words-session');
     sayWord();
@@ -3102,7 +3165,7 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   function startWordReview() {
     const due = shuffle(wordDue()).slice(0, 20);
     const modes = ['quiz', 'listen', 'spell'];
-    W = { items: due.map(([d, i]) => { const w = DECK[d].words[i]; const ms = canSpell(w) ? modes : modes.slice(0, 2); return { d, i, mode: ms[Math.floor(Math.random() * ms.length)] }; }), idx: 0, right: 0, review: true };
+    W = wordSession(due.map(([d, i]) => { const w = DECK[d].words[i]; const ms = canSpell(w) ? modes : modes.slice(0, 2); return { d, i, mode: ms[Math.floor(Math.random() * ms.length)] }; }), true);
     [...new Set(due.map(x => x[0]))].forEach(d => player.load('w-' + d));
     go('words-session');
     sayWord();
@@ -3132,16 +3195,16 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     return it;
   }
   function viewWordSession() {
-    const total = W.items.length;
+    const total = W.items.length, n0 = W.n0 || total;
     if (W.idx >= total) {
-      const rate = total ? W.right / total : 0;
+      const rate = n0 ? W.right / n0 : 0;
       const msg = rate >= 0.8 ? ['Great job!', 'よくできました'] : rate >= 0.5 ? ['Nice work!', 'おつかれさまでした'] : ['Keep practicing!', 'くり返すうちに覚えられます'];
       return lessonBar(total, total) + '<div' + (W.items[0] ? deckStyle(W.items[0].d) : '') + '><div class="screen-done"><svg class="done-mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="29"/><path d="M19 33.5 28 42l17-19"/></svg>' +
-        '<h1 class="display">' + bi(msg[0], msg[1]) + '</h1><p class="lead">' + W.right + ' / ' + total + ' correct</p></div>' +
+        '<h1 class="display">' + bi(msg[0], msg[1]) + '</h1><p class="lead">' + W.right + ' / ' + n0 + ' correct on the first try</p><p class="ja-sub">' + (total > n0 ? '間違えた単語は、正解するまでくり返しました' : '全部1回で正解しました') + '</p></div>' +
         actionbar('<div class="pair">' + (W.review ? '' : '<button class="pill soft block" data-act="wordsAgain">Again</button>') + '<button class="pill primary block" data-act="toWords">Done</button></div>') + '</div>';
     }
     const it = wordItem(), q = it.q, w = q.w, d = DECK[it.d];
-    const tag = '<div class="row"><span class="qlabel" style="--q:' + deckTone(it.d)[0] + '"><svg viewBox="0 0 24 24" aria-hidden="true">' + MODES[it.mode][2] + '</svg>' + MODES[it.mode][0] + '</span><span class="qtag">' + esc(d.title) + '</span></div>';
+    const tag = '<div class="row"><span class="qlabel" style="--q:' + deckTone(it.d)[0] + '"><svg viewBox="0 0 24 24" aria-hidden="true">' + MODES[it.mode][2] + '</svg>' + MODES[it.mode][0] + '</span><span class="qtag">' + (it.again ? 'Try again' : esc(d.title)) + '</span></div>';
     let body = '';
     const exLine = w.ex ? '<div class="ex-card">' + sentence(w.ex, w.exJa) + '</div>' : '';
     if (it.mode === 'cards') {
@@ -3182,8 +3245,12 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   }
   function wordDone(result) {
     const it = W.items[W.idx];
-    grade(wkey(it.d, DECK[it.d].words[it.i]), result);
-    if (result === 'ok') W.right++;
+    if (it.res) return; // already answered
+    it.res = result;
+    if (it.again) countOnly();
+    else { grade(wkey(it.d, DECK[it.d].words[it.i]), result); if (result === 'ok') W.right++; }
+    // Not right yet ("Not yet" included): the word comes back at the end, so the session ends only when every word is right.
+    if (result !== 'ok' && !W.items.slice(W.idx + 1).some(x => x.d === it.d && x.i === it.i)) W.items.push({ d: it.d, i: it.i, mode: it.mode, again: true });
     persist();
   }
   function wordAdvance() {
@@ -3220,10 +3287,11 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
     startReview: () => startSession('review', shuffle(dueKeys().slice(0, S.settings.reviewMax))),
     resumeReview: () => {
       // A queue saved on another device may hold keys this one can't build; drop them and keep the place.
-      const queue = S.review.queue.filter(qOf), idx = S.review.queue.slice(0, S.review.idx).filter(qOf).length;
+      const old = S.review.queue, queue = old.filter(qOf), idx = old.slice(0, S.review.idx).filter(qOf).length;
+      const n0 = old.slice(0, S.review.n0 || old.length).filter(qOf).length;
       if (idx >= queue.length) { S.review = null; persist(); go('home'); return; }
-      S.review = { queue, idx }; persist();
-      enterLesson({ type: 'session', kind: 'review', queue, idx });
+      S.review = { queue, idx, n0 }; persist();
+      enterLesson({ type: 'session', kind: 'review', queue, idx, n0, missed: [], right: 0 });
     },
     startMistakes: () => startSession('mistakes', shuffle(mistakeKeys()).slice(0, S.settings.reviewMax)),
     quit: () => {
@@ -3481,10 +3549,13 @@ h1 .t-sub { font-size: 0.56em; margin-top: 6px; line-height: 1.4; }
   // Ask the browser to keep our storage (helps on home-screen web apps; harmless elsewhere).
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* optional */ }
 
-  render();
+  const resumed = restoreResume();
+  try { render(); } catch (e) { V = { name: 'home' }; L = Q = W = R = LS = VS = null; render(); }
+  if (resumed) requestAnimationFrame(() => window.scrollTo(0, resumed.y));
   cloud.init();
-  // Title screen on every launch, like an installed app; it fades on its own or with a tap.
-  (() => {
+  // Title screen on a fresh launch, like an installed app; it fades on its own or with a tap.
+  // Not when the app reopens on a screen it was closed on, so it feels as if it never closed.
+  if (!resumed || V.name === 'home') (() => {
     const el = document.createElement('div');
     el.className = 'splash';
     el.setAttribute('role', 'presentation');
